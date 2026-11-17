@@ -6160,6 +6160,10 @@ public class CsvFormatReader implements SegmentableFormatReader {
          * Reports the row's held coercion errors now that its width has been accepted. Returns false when the row
          * must be dropped. A row that failed BOTH its width and a conversion never reaches here: the width guard
          * clears the pending state and reports the structural error, which is the one the caller needs.
+         *
+         * @param rawLine the record text a row-level rejection quotes as its excerpt. Only that branch reads it, so a
+         *                caller holding nothing but field errors passes {@code null} rather than materializing one --
+         *                which is what keeps the direct walkers off a per-row {@link String}.
          */
         private boolean flushPendingErrors(String rawLine) {
             if (hasPendingErrors == false) {
@@ -6385,9 +6389,10 @@ public class CsvFormatReader implements SegmentableFormatReader {
          * <p>The three grammar walkers share this; the fused projected walker does not, because it interleaves
          * trailing-field handling with its own fill.
          *
-         * <p>Allocation-sensitive: {@link #directRawLine()} materializes the record as a {@link String}, and the
-         * {@code hasPendingErrors} short-circuit is what keeps a clean row from paying for it. A row that staged a
-         * field error does pay, accepted or not -- under {@code null_field} such a row is reported and kept.
+         * <p>Allocation-sensitive: {@link #directRawLine()} materializes the record as a {@link String}, and only a
+         * row-level rejection ever quotes one. A clean row is kept off it by the {@code hasPendingErrors}
+         * short-circuit, and a row holding nothing but field errors -- the {@code null_field} shape, reported and
+         * kept -- by the {@code pendingRowError} test, so neither pays for an excerpt nobody reads.
          *
          * @param totalFields the number of fields the walker counted in this record
          * @return {@code true} if the row was accepted, {@code false} if the error policy rejected it
@@ -6399,9 +6404,11 @@ public class CsvFormatReader implements SegmentableFormatReader {
                 onRowError(rowTooWideMessage(totalFields), null, directRawLine(), true);
                 return false;
             }
-            // hasPendingErrors guards the call, not the result: directRawLine() materialises the row as a String, so
-            // a row that staged nothing never builds one. A row that did is reported here and may still be kept.
-            if (hasPendingErrors && flushPendingErrors(directRawLine()) == false) {
+            // Both guards are about the same String. hasPendingErrors keeps a clean row out of the call; the
+            // pendingRowError test keeps a row whose only faults are field errors from building an excerpt the
+            // flush will not read. That second shape is the common one under null_field, where every such row is
+            // reported and kept.
+            if (hasPendingErrors && flushPendingErrors(pendingRowError == null ? null : directRawLine()) == false) {
                 return false;
             }
             // Null-fill projected columns whose source index falls past the row's trailing edge.
